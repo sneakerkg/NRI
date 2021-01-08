@@ -5,13 +5,14 @@ import time
 
 class SpringSim(object):
     def __init__(self, n_balls=5, box_size=5., loc_std=.5, vel_norm=.5,
-                 interaction_strength=.1, noise_var=0.):
+                 interaction_strength=.1, noise_var=0., mutable_edge=False):
         self.n_balls = n_balls
         self.box_size = box_size
         self.loc_std = loc_std
         self.vel_norm = vel_norm
         self.interaction_strength = interaction_strength
         self.noise_var = noise_var
+        self.mutable_edge = mutable_edge
 
         self._spring_types = np.array([0., 0.5, 1.])
         self._delta_T = 0.001
@@ -71,7 +72,10 @@ class SpringSim(object):
         return dist
 
     def sample_trajectory(self, T=10000, sample_freq=10,
-                          spring_prob=[1. / 2, 0, 1. / 2]):
+                          spring_prob=[1. / 2, 0, 1. / 2], random_event_range=None):
+
+        np.random.seed()
+
         n = self.n_balls
         assert (T % sample_freq == 0)
         T_save = int(T / sample_freq - 1)
@@ -84,6 +88,11 @@ class SpringSim(object):
                                  p=spring_prob)
         edges = np.tril(edges) + np.tril(edges, -1).T
         np.fill_diagonal(edges, 0)
+        edges2 = np.random.choice(self._spring_types,
+                            size=(self.n_balls, self.n_balls),
+                            p=spring_prob)
+        edges2 = np.tril(edges2) + np.tril(edges2, -1).T
+        np.fill_diagonal(edges2, 0)
         # Initialize location and velocity
         loc = np.zeros((T_save, 2, n))
         vel = np.zeros((T_save, 2, n))
@@ -110,6 +119,15 @@ class SpringSim(object):
             F[F < -self._max_F] = -self._max_F
 
             vel_next += self._delta_T * F
+
+            # Generate the event happening timespot
+            if random_event_range is not None:
+                event_timestamp = np.random.randint(random_event_range[0], random_event_range[1]) // sample_freq * sample_freq
+            else:
+                event_timestamp = T // 2
+
+            print (event_timestamp, T)
+
             # run leapfrog
             for i in range(1, T):
                 loc_next += self._delta_T * vel_next
@@ -119,7 +137,10 @@ class SpringSim(object):
                     loc[counter, :, :], vel[counter, :, :] = loc_next, vel_next
                     counter += 1
 
-                forces_size = - self.interaction_strength * edges
+                if self.mutable_edge and i >= event_timestamp:
+                    forces_size = - self.interaction_strength * edges2
+                else:
+                    forces_size = - self.interaction_strength * edges
                 np.fill_diagonal(forces_size, 0)
                 # assert (np.abs(forces_size[diag_mask]).min() > 1e-10)
 
@@ -137,18 +158,23 @@ class SpringSim(object):
             # Add noise to observations
             loc += np.random.randn(T_save, 2, self.n_balls) * self.noise_var
             vel += np.random.randn(T_save, 2, self.n_balls) * self.noise_var
-            return loc, vel, edges
+
+            if self.mutable_edge:
+                edges = np.concatenate((np.expand_dims(edges, axis=0),
+                                        np.expand_dims(edges2, axis=0)), axis=0)
+            return loc, vel, edges, event_timestamp
 
 
 class ChargedParticlesSim(object):
     def __init__(self, n_balls=5, box_size=5., loc_std=1., vel_norm=0.5,
-                 interaction_strength=1., noise_var=0.):
+                 interaction_strength=1., noise_var=0., mutable=False):
         self.n_balls = n_balls
         self.box_size = box_size
         self.loc_std = loc_std
         self.vel_norm = vel_norm
         self.interaction_strength = interaction_strength
         self.noise_var = noise_var
+        self.mutable = mutable
 
         self._charge_types = np.array([-1., 0., 1.])
         self._delta_T = 0.001
@@ -220,6 +246,13 @@ class ChargedParticlesSim(object):
         charges = np.random.choice(self._charge_types, size=(self.n_balls, 1),
                                    p=charge_prob)
         edges = charges.dot(charges.transpose())
+
+        charges2 = np.random.choice(self._charge_types, size=(self.n_balls, 1),
+                                   p=charge_prob)
+        edges2 = charges2.dot(charges2.transpose())
+
+
+
         # Initialize location and velocity
         loc = np.zeros((T_save, 2, n))
         vel = np.zeros((T_save, 2, n))
@@ -264,7 +297,13 @@ class ChargedParticlesSim(object):
                 l2_dist_power3 = np.power(
                     self._l2(loc_next.transpose(), loc_next.transpose()),
                     3. / 2.)
-                forces_size = self.interaction_strength * edges / l2_dist_power3
+
+
+                if i >= T // 2:
+                    forces_size = self.interaction_strength * edges2 / l2_dist_power3
+                else:
+                    forces_size = self.interaction_strength * edges / l2_dist_power3
+
                 np.fill_diagonal(forces_size, 0)
                 # assert (np.abs(forces_size[diag_mask]).min() > 1e-10)
 
@@ -282,6 +321,11 @@ class ChargedParticlesSim(object):
             # Add noise to observations
             loc += np.random.randn(T_save, 2, self.n_balls) * self.noise_var
             vel += np.random.randn(T_save, 2, self.n_balls) * self.noise_var
+
+            if self.mutable:
+                edges = np.concatenate((np.expand_dims(edges, axis=0),
+                                        np.expand_dims(edges2, axis=0)), axis=0)
+
             return loc, vel, edges
 
 
